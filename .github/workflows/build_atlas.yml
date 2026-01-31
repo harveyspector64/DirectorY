@@ -1,0 +1,48 @@
+name: Build Director Atlas
+
+on:
+  push:
+    branches:
+      - "**"
+
+jobs:
+  build-atlas:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build atlas from spreadsheet
+        run: python scripts/import_manual_xlsx.py
+
+      - name: Validate directors.json
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("public/data/atlas/directors.json")
+          if not path.exists():
+              raise SystemExit("directors.json missing")
+          json.loads(path.read_text(encoding="utf-8"))
+          print("directors.json is valid")
+          PY
+
+      - name: Commit generated data
+        run: |
+          if [[ -n $(git status --porcelain) ]]; then
+            git config user.name "github-actions"
+            git config user.email "github-actions@users.noreply.github.com"
+            git add public/data/atlas data/manual/directors_manual.csv
+            git commit -m "Update atlas data"
+            git push
+          else
+            echo "No changes to commit"
+          fi
