@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mid-Wilshire Mayhem</title>
+    <style>
+      html, body, #app { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0a0f18; font-family: 'Inter', system-ui, sans-serif; }
+      .hud {
+        position: fixed;
+        left: 0; top: 0; width: 100%; pointer-events: none;
+        color: #f8f8ff; text-shadow: 0 0 6px rgba(0,0,0,.6);
+      }
+      .topbar { display:flex; justify-content:space-between; padding: 12px 16px; font-weight: 700; letter-spacing:.5px; }
+      .wanted span { color:#f6c700; opacity:.25; margin-left:2px; }
+      .wanted span.on { opacity:1; filter: drop-shadow(0 0 4px #f6c700); }
+      .panel { position:fixed; right:16px; bottom:16px; width:240px; height:240px; border-radius:14px; overflow:hidden; border:2px solid rgba(255,255,255,.2); box-shadow:0 6px 28px rgba(0,0,0,.4); }
+      .panel canvas { width:100%; height:100%; }
+      .prompt { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: rgba(12,18,28,.75); border: 1px solid rgba(255,255,255,.25); border-radius: 999px; padding: 8px 14px; font-size: 14px; }
+      .legend { position:fixed; left:16px; bottom:16px; background:rgba(9,12,20,.78); border:1px solid rgba(255,255,255,.16); border-radius:12px; padding:12px 14px; font-size:13px; line-height:1.5; }
+      .title { color:#55d0ff; font-size: 14px; text-transform: uppercase; letter-spacing:1.1px; }
+      .subtitle { opacity:.85; font-weight:500; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div class="hud">
+      <div class="topbar">
+        <div>
+          <div class="title">MID-WILSHIRE MAYHEM</div>
+          <div class="subtitle" id="zone">Zone: LACMA / Miracle Mile</div>
+        </div>
+        <div style="text-align:right">
+          <div id="state">On Foot</div>
+          <div class="wanted" id="wanted"></div>
+        </div>
+      </div>
+      <div class="legend">
+        <strong>Controls</strong><br />
+        WASD / Arrow Keys: Move / Drive<br />
+        Shift: Sprint / Boost<br />
+        E: Enter / Exit Car<br />
+        Space: Handbrake<br />
+        R: Reset position
+      </div>
+      <div class="prompt" id="prompt" style="display:none"></div>
+      <div class="panel"><canvas id="minimap" width="240" height="240"></canvas></div>
+    </div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
