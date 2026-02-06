@@ -1,404 +1,411 @@
-import * as THREE from 'https://unpkg.com/three@0.174.0/build/three.module.js';
+(() => {
+  const WORLD_SIZE = 4200;
+  const BLOCK = 260;
+  const ROAD = 64;
 
-const WORLD_SIZE = 900;
-const ROAD_W = 22;
-const BLOCK = 90;
-const HALF = WORLD_SIZE / 2;
+  const app = document.getElementById('app');
+  const zoneEl = document.getElementById('zone');
+  const stateEl = document.getElementById('state');
+  const wantedEl = document.getElementById('wanted');
+  const promptEl = document.getElementById('prompt');
+  const minimap = document.getElementById('minimap');
+  const mm = minimap.getContext('2d');
 
-const app = document.getElementById('app');
-const zoneEl = document.getElementById('zone');
-const stateEl = document.getElementById('state');
-const wantedEl = document.getElementById('wanted');
-const promptEl = document.getElementById('prompt');
-const minimap = document.getElementById('minimap');
-const minimapCtx = minimap.getContext('2d');
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  app.appendChild(canvas);
 
-const keys = {};
-window.addEventListener('keydown', (e) => {
-  keys[e.key.toLowerCase()] = true;
-  if (e.key === ' ') e.preventDefault();
-});
-window.addEventListener('keyup', (e) => (keys[e.key.toLowerCase()] = false));
+  const keys = {};
+  let interactLatch = false;
+  let resetLatch = false;
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.shadowMap.enabled = true;
-app.appendChild(renderer.domElement);
+  window.addEventListener('keydown', (e) => {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key === ' ') e.preventDefault();
+  });
+  window.addEventListener('keyup', (e) => (keys[e.key.toLowerCase()] = false));
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color('#0c1525');
-scene.fog = new THREE.Fog('#0c1525', 200, 780);
+  let audioCtx;
+  const initAudio = () => {
+    if (!audioCtx) audioCtx = new AudioContext();
+  };
+  window.addEventListener('pointerdown', initAudio, { once: true });
+  const beep = (f = 440, d = 0.08, t = 'sine', g = 0.02) => {
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    o.type = t;
+    o.frequency.value = f;
+    gain.gain.value = g;
+    o.connect(gain).connect(audioCtx.destination);
+    o.start();
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + d);
+    o.stop(audioCtx.currentTime + d);
+  };
 
-const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 2000);
-camera.position.set(0, 160, 120);
-camera.lookAt(0, 0, 0);
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
-const ambient = new THREE.HemisphereLight('#99d4ff', '#131510', 0.78);
-scene.add(ambient);
-const sun = new THREE.DirectionalLight('#fff8dc', 1.4);
-sun.position.set(170, 290, 85);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.left = -420;
-sun.shadow.camera.right = 420;
-sun.shadow.camera.top = 420;
-sun.shadow.camera.bottom = -420;
-scene.add(sun);
+  const zones = [
+    { name: 'Mid-Wilshire / Miracle Mile', x: -400, y: -100 },
+    { name: 'Koreatown Fringe', x: -1150, y: -200 },
+    { name: 'Beverly Grove', x: 760, y: -250 },
+    { name: 'Pico-Union Edge', x: -900, y: 850 },
+    { name: 'Hollywood Border', x: 650, y: -1350 }
+  ];
 
-function roadMaterial() {
-  return new THREE.MeshStandardMaterial({ color: '#2d3239', roughness: 0.9, metalness: 0.05 });
-}
+  const buildings = [];
+  const trees = [];
+  for (let gx = -7; gx <= 7; gx++) {
+    for (let gy = -7; gy <= 7; gy++) {
+      const cx = gx * BLOCK;
+      const cy = gy * BLOCK;
+      if (Math.abs(cx % BLOCK) < ROAD || Math.abs(cy % BLOCK) < ROAD) continue;
 
-const world = new THREE.Group();
-scene.add(world);
+      const count = Math.random() < 0.4 ? 2 : 1;
+      for (let i = 0; i < count; i++) {
+        const w = rand(80, 170);
+        const h = rand(80, 170);
+        buildings.push({
+          x: cx + rand(-55, 55),
+          y: cy + rand(-55, 55),
+          w,
+          h,
+          color: `hsl(${rand(195, 230)} 18% ${rand(20, 40)}%)`,
+          roof: `hsl(${rand(200, 220)} 20% ${rand(38, 52)}%)`
+        });
+      }
 
-const asphalt = roadMaterial();
-const stripeMat = new THREE.MeshStandardMaterial({ color: '#d7c278', emissive: '#6a5518', emissiveIntensity: 0.2 });
-const curbMat = new THREE.MeshStandardMaterial({ color: '#8a8f94' });
-const grassMat = new THREE.MeshStandardMaterial({ color: '#1d392a' });
-
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE), grassMat);
-ground.rotation.x = -Math.PI / 2;
-ground.receiveShadow = true;
-world.add(ground);
-
-const roads = [];
-for (let i = -4; i <= 4; i++) {
-  const x = i * BLOCK;
-  const vRoad = new THREE.Mesh(new THREE.BoxGeometry(ROAD_W, 0.2, WORLD_SIZE), asphalt);
-  vRoad.position.set(x, 0.1, 0);
-  vRoad.receiveShadow = true;
-  world.add(vRoad);
-  roads.push({ x1: x - ROAD_W / 2, x2: x + ROAD_W / 2, z1: -HALF, z2: HALF });
-
-  const hRoad = new THREE.Mesh(new THREE.BoxGeometry(WORLD_SIZE, 0.2, ROAD_W), asphalt);
-  hRoad.position.set(0, 0.1, x);
-  hRoad.receiveShadow = true;
-  world.add(hRoad);
-  roads.push({ x1: -HALF, x2: HALF, z1: x - ROAD_W / 2, z2: x + ROAD_W / 2 });
-
-  for (let j = -8; j <= 8; j++) {
-    if (j % 2 === 0) {
-      const s = new THREE.Mesh(new THREE.BoxGeometry(4, 0.08, 0.5), stripeMat);
-      s.position.set(x, 0.25, j * 28);
-      world.add(s);
-      const s2 = s.clone();
-      s2.rotation.y = Math.PI / 2;
-      s2.position.set(j * 28, 0.25, x);
-      world.add(s2);
+      if (Math.random() < 0.55) {
+        trees.push({ x: cx + rand(-95, 95), y: cy + rand(-95, 95), r: rand(14, 24) });
+      }
     }
   }
-}
 
-function makeBuilding(x, z) {
-  const h = 20 + Math.random() * 70;
-  const w = 30 + Math.random() * 38;
-  const d = 30 + Math.random() * 38;
-  const hue = 200 + Math.random() * 40;
-  const b = new THREE.Mesh(
-    new THREE.BoxGeometry(w, h, d),
-    new THREE.MeshStandardMaterial({ color: new THREE.Color(`hsl(${hue},18%,${25 + Math.random() * 25}%)`), roughness: 0.85 })
-  );
-  b.position.set(x, h / 2, z);
-  b.castShadow = true;
-  b.receiveShadow = true;
-  world.add(b);
-}
+  const roads = [];
+  for (let i = -8; i <= 8; i++) {
+    roads.push({ x: i * BLOCK - ROAD / 2, y: -WORLD_SIZE / 2, w: ROAD, h: WORLD_SIZE });
+    roads.push({ x: -WORLD_SIZE / 2, y: i * BLOCK - ROAD / 2, w: WORLD_SIZE, h: ROAD });
+  }
 
-for (let x = -4; x <= 4; x++) {
-  for (let z = -4; z <= 4; z++) {
-    const cx = x * BLOCK;
-    const cz = z * BLOCK;
-    if (Math.abs(cx) < ROAD_W || Math.abs(cz) < ROAD_W) continue;
-    if (Math.random() < 0.9) makeBuilding(cx + (Math.random() - 0.5) * 24, cz + (Math.random() - 0.5) * 24);
+  const player = { x: -450, y: -110, dir: 0, onFoot: true, car: null, wanted: 0, heat: 0, cash: 5000 };
+  const playerCar = { x: -500, y: -90, dir: Math.PI / 2, speed: 0, color: '#ef4444', w: 30, h: 52, playerOwned: true };
 
-    if (Math.random() < 0.38) {
-      const p = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.1, 9, 8), new THREE.MeshStandardMaterial({ color: '#5a3f2d' }));
-      const crown = new THREE.Mesh(new THREE.SphereGeometry(5, 8, 8), new THREE.MeshStandardMaterial({ color: '#2f8f4b' }));
-      p.position.set(cx + (Math.random() - 0.5) * 40, 4.5, cz + (Math.random() - 0.5) * 40);
-      crown.position.set(p.position.x, 12, p.position.z);
-      world.add(p, crown);
+  const traffic = [];
+  for (let i = 0; i < 42; i++) {
+    const horizontal = Math.random() > 0.5;
+    const lane = Math.round(rand(-6, 6)) * BLOCK;
+    traffic.push({
+      x: horizontal ? rand(-WORLD_SIZE / 2, WORLD_SIZE / 2) : lane,
+      y: horizontal ? lane : rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
+      dir: horizontal ? (Math.random() > 0.5 ? Math.PI / 2 : -Math.PI / 2) : (Math.random() > 0.5 ? 0 : Math.PI),
+      speed: rand(45, 90),
+      color: `hsl(${rand(0, 360)} 75% 58%)`,
+      w: 28,
+      h: 50,
+      ai: true
+    });
+  }
+
+  const pedestrians = [];
+  for (let i = 0; i < 85; i++) {
+    pedestrians.push({
+      x: rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
+      y: rand(-WORLD_SIZE / 2, WORLD_SIZE / 2),
+      dir: rand(0, Math.PI * 2),
+      speed: rand(22, 36),
+      color: `hsl(${rand(0, 360)} 60% 60%)`
+    });
+  }
+
+  const cops = [];
+  for (let i = 0; i < 11; i++) {
+    cops.push({ x: rand(-1600, 1600), y: rand(-1600, 1600), dir: rand(0, Math.PI * 2), speed: 115, w: 30, h: 52, siren: 0 });
+  }
+
+  const entitiesCars = [...traffic, playerCar];
+
+  const worldToScreen = (x, y, camX, camY) => ({
+    x: (x - camX) + canvas.width / 2,
+    y: (y - camY) + canvas.height / 2
+  });
+
+  const drawCar = (car, camX, camY, police = false) => {
+    const p = worldToScreen(car.x, car.y, camX, camY);
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(car.dir);
+    ctx.fillStyle = police ? '#0f172a' : car.color;
+    ctx.fillRect(-car.w / 2, -car.h / 2, car.w, car.h);
+    ctx.fillStyle = '#cbd5e1';
+    ctx.fillRect(-car.w * 0.33, -car.h * 0.2, car.w * 0.66, car.h * 0.36);
+    if (police) {
+      ctx.fillStyle = Math.sin(performance.now() * 0.02) > 0 ? '#3b82f6' : '#ef4444';
+      ctx.fillRect(-9, -car.h * 0.32, 18, 5);
     }
-  }
-}
+    ctx.restore();
+  };
 
-const player = {
-  pos: new THREE.Vector3(-40, 0.7, 20),
-  dir: 0,
-  speed: 0,
-  onFoot: true,
-  car: null,
-  wanted: 0,
-  crimeHeat: 0,
-};
+  const nearestZone = () => zones.slice().sort((a, b) => (a.x - player.x) ** 2 + (a.y - player.y) ** 2 - ((b.x - player.x) ** 2 + (b.y - player.y) ** 2))[0];
 
-const playerMesh = new THREE.Mesh(new THREE.CapsuleGeometry(1.2, 2.4, 4, 8), new THREE.MeshStandardMaterial({ color: '#f9e3b1' }));
-playerMesh.castShadow = true;
-playerMesh.position.copy(player.pos);
-scene.add(playerMesh);
+  const updateWanted = (dt) => {
+    player.heat = Math.max(0, player.heat - dt * 0.9);
+    player.wanted = clamp(Math.floor(player.heat / 10), 0, 5);
+  };
 
-function createCar(color = '#3d9df2', police = false) {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(6, 2, 11), new THREE.MeshStandardMaterial({ color }));
-  body.position.y = 1.6;
-  body.castShadow = true;
-  const top = new THREE.Mesh(new THREE.BoxGeometry(5.3, 1.7, 5.5), new THREE.MeshStandardMaterial({ color: '#d0d6df' }));
-  top.position.set(0, 3, -0.7);
-  if (police) {
-    body.material = new THREE.MeshStandardMaterial({ color: '#111821' });
-    const bar = new THREE.Mesh(new THREE.BoxGeometry(3, 0.5, 0.7), new THREE.MeshStandardMaterial({ color: '#c5d3ff', emissive: '#3b65ff', emissiveIntensity: 0.9 }));
-    bar.position.set(0, 4.2, -0.6);
-    g.add(bar);
-  }
-  g.add(body, top);
-  g.castShadow = true;
-  return g;
-}
-
-function createPed() {
-  const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.9, 1.4, 4, 8), new THREE.MeshStandardMaterial({ color: `hsl(${Math.random() * 360},60%,60%)` }));
-  g.add(body);
-  return g;
-}
-
-const traffic = [];
-for (let i = 0; i < 26; i++) {
-  const car = createCar(`hsl(${Math.random() * 360},72%,56%)`);
-  const laneX = (-4 + Math.floor(Math.random() * 9)) * BLOCK;
-  const laneZ = (-4 + Math.floor(Math.random() * 9)) * BLOCK;
-  const horizontal = Math.random() > 0.5;
-  car.position.set(horizontal ? -HALF + Math.random() * WORLD_SIZE : laneX, 0, horizontal ? laneZ : -HALF + Math.random() * WORLD_SIZE);
-  car.rotation.y = horizontal ? (Math.random() > 0.5 ? 0 : Math.PI) : Math.random() > 0.5 ? Math.PI / 2 : -Math.PI / 2;
-  scene.add(car);
-  traffic.push({ mesh: car, speed: 10 + Math.random() * 18, horizontal, npc: true, police: false });
-}
-
-const cops = [];
-for (let i = 0; i < 6; i++) {
-  const c = createCar('#102449', true);
-  c.position.set((Math.random() - 0.5) * WORLD_SIZE, 0, (Math.random() - 0.5) * WORLD_SIZE);
-  scene.add(c);
-  cops.push({ mesh: c, speed: 22, police: true, sirenTick: 0 });
-}
-
-const peds = [];
-for (let i = 0; i < 46; i++) {
-  const p = createPed();
-  p.position.set((Math.random() - 0.5) * WORLD_SIZE, 0.4, (Math.random() - 0.5) * WORLD_SIZE);
-  scene.add(p);
-  peds.push({ mesh: p, dir: Math.random() * Math.PI * 2, speed: 3 + Math.random() * 2 });
-}
-
-const playerCar = createCar('#ef4136');
-playerCar.position.set(-52, 0, 18);
-playerCar.rotation.y = Math.PI / 2;
-scene.add(playerCar);
-traffic.push({ mesh: playerCar, speed: 0, horizontal: true, npc: false, police: false });
-
-const zones = [
-  { name: 'LACMA / Miracle Mile', x: -40, z: 20 },
-  { name: 'Koreatown Border', x: -160, z: 70 },
-  { name: 'Beverly Grove', x: 140, z: -20 },
-  { name: 'Pico-Union Edge', x: -120, z: -180 },
-];
-
-let audioCtx;
-function tone(freq, dur = 0.08, type = 'sine', gain = 0.03) {
-  if (!audioCtx) return;
-  const o = audioCtx.createOscillator();
-  const g = audioCtx.createGain();
-  o.type = type;
-  o.frequency.value = freq;
-  g.gain.value = gain;
-  o.connect(g).connect(audioCtx.destination);
-  o.start();
-  g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
-  o.stop(audioCtx.currentTime + dur);
-}
-window.addEventListener('pointerdown', () => {
-  if (!audioCtx) audioCtx = new AudioContext();
-});
-
-function clampWorld(v) {
-  v.x = THREE.MathUtils.clamp(v.x, -HALF + 4, HALF - 4);
-  v.z = THREE.MathUtils.clamp(v.z, -HALF + 4, HALF - 4);
-}
-
-function nearestDrivable(pos) {
-  let d = Infinity;
-  for (const r of roads) {
-    const cx = THREE.MathUtils.clamp(pos.x, r.x1, r.x2);
-    const cz = THREE.MathUtils.clamp(pos.z, r.z1, r.z2);
-    d = Math.min(d, (cx - pos.x) ** 2 + (cz - pos.z) ** 2);
-  }
-  return Math.sqrt(d);
-}
-
-function updatePlayer(dt) {
-  const inputX = (keys['a'] || keys['arrowleft'] ? -1 : 0) + (keys['d'] || keys['arrowright'] ? 1 : 0);
-  const inputZ = (keys['w'] || keys['arrowup'] ? -1 : 0) + (keys['s'] || keys['arrowdown'] ? 1 : 0);
-
-  if (keys['r']) {
-    player.pos.set(-40, 0.7, 20);
-    playerCar.position.set(-52, 0, 18);
-    player.onFoot = true;
-    player.car = null;
-  }
-
-  if (player.onFoot) {
-    const dir = new THREE.Vector3(inputX, 0, inputZ);
-    if (dir.lengthSq() > 0.0001) {
-      dir.normalize();
-      const speed = keys['shift'] ? 28 : 16;
-      player.pos.addScaledVector(dir, speed * dt);
-      player.dir = Math.atan2(dir.x, dir.z);
-      playerMesh.rotation.y = player.dir;
+  const updatePlayer = (dt) => {
+    if (keys.r && !resetLatch) {
+      resetLatch = true;
+      player.x = -450; player.y = -110; player.dir = 0; player.onFoot = true; player.car = null;
+      playerCar.x = -500; playerCar.y = -90; playerCar.speed = 0;
     }
-    clampWorld(player.pos);
-    playerMesh.position.copy(player.pos);
+    if (!keys.r) resetLatch = false;
 
-    const dcar = player.pos.distanceTo(playerCar.position);
-    if (dcar < 8) {
-      promptEl.style.display = 'block';
+    if (player.onFoot) {
+      const mx = (keys.a || keys.arrowleft ? -1 : 0) + (keys.d || keys.arrowright ? 1 : 0);
+      const my = (keys.w || keys.arrowup ? -1 : 0) + (keys.s || keys.arrowdown ? 1 : 0);
+      const len = Math.hypot(mx, my);
+      if (len > 0) {
+        const sp = keys.shift ? 170 : 120;
+        player.x += (mx / len) * sp * dt;
+        player.y += (my / len) * sp * dt;
+        player.dir = Math.atan2(my, mx) + Math.PI / 2;
+      }
+
+      const nearCar = dist(player, playerCar) < 70;
+      promptEl.style.display = nearCar ? 'block' : 'none';
       promptEl.textContent = 'Press E to enter vehicle';
-      if (keys['e']) {
+      if (nearCar && keys.e && !interactLatch) {
+        interactLatch = true;
         player.onFoot = false;
         player.car = playerCar;
-        tone(420, 0.12, 'triangle', 0.05);
+        beep(370, 0.08, 'triangle', 0.04);
       }
-    } else promptEl.style.display = 'none';
-  } else {
-    const car = player.car;
-    const accel = (keys['w'] || keys['arrowup'] ? 1 : 0) - (keys['s'] || keys['arrowdown'] ? 1 : 0);
-    const turn = (keys['a'] || keys['arrowleft'] ? 1 : 0) - (keys['d'] || keys['arrowright'] ? 1 : 0);
-    traffic.find((t) => t.mesh === car).speed += accel * dt * 34;
-    traffic.find((t) => t.mesh === car).speed *= keys[' '] ? 0.93 : 0.985;
-    traffic.find((t) => t.mesh === car).speed = THREE.MathUtils.clamp(traffic.find((t) => t.mesh === car).speed, -18, keys['shift'] ? 68 : 48);
-    car.rotation.y += turn * dt * (0.95 + Math.abs(traffic.find((t) => t.mesh === car).speed) * 0.015);
-    const forward = new THREE.Vector3(Math.sin(car.rotation.y), 0, Math.cos(car.rotation.y));
-    car.position.addScaledVector(forward, traffic.find((t) => t.mesh === car).speed * dt);
-    clampWorld(car.position);
-    player.pos.copy(car.position);
-
-    promptEl.style.display = 'block';
-    promptEl.textContent = 'Press E to exit vehicle';
-    if (keys['e']) {
-      player.onFoot = true;
-      player.car = null;
-      player.pos.add(new THREE.Vector3(3, 0, 3));
-      tone(310, 0.1, 'sawtooth', 0.03);
-    }
-  }
-}
-
-function updateTraffic(dt) {
-  for (const t of traffic) {
-    if (!t.npc) continue;
-    const f = new THREE.Vector3(Math.sin(t.mesh.rotation.y), 0, Math.cos(t.mesh.rotation.y));
-    t.mesh.position.addScaledVector(f, t.speed * dt);
-    if (t.mesh.position.x < -HALF + 6 || t.mesh.position.x > HALF - 6 || t.mesh.position.z < -HALF + 6 || t.mesh.position.z > HALF - 6) {
-      t.mesh.rotation.y += Math.PI;
-    }
-    if (Math.random() < 0.005) t.mesh.rotation.y += (Math.random() - 0.5) * Math.PI * 0.5;
-  }
-}
-
-function updatePeds(dt) {
-  for (const p of peds) {
-    p.mesh.position.x += Math.sin(p.dir) * p.speed * dt;
-    p.mesh.position.z += Math.cos(p.dir) * p.speed * dt;
-    if (nearestDrivable(p.mesh.position) < 7 || Math.abs(p.mesh.position.x) > HALF - 10 || Math.abs(p.mesh.position.z) > HALF - 10 || Math.random() < 0.01) p.dir += (Math.random() - 0.5) * 2.2;
-    p.mesh.rotation.y = p.dir;
-
-    if (!player.onFoot && p.mesh.position.distanceTo(player.pos) < 5 && Math.abs(traffic.find((t) => t.mesh === player.car).speed) > 16) {
-      player.crimeHeat += 4;
-      p.mesh.position.add(new THREE.Vector3((Math.random() - 0.5) * 8, 0, (Math.random() - 0.5) * 8));
-      tone(90, 0.16, 'square', 0.06);
-    }
-  }
-}
-
-function updateCops(dt) {
-  player.wanted = Math.min(5, Math.floor(player.crimeHeat / 15));
-  player.crimeHeat = Math.max(0, player.crimeHeat - dt * 1.3);
-
-  for (const c of cops) {
-    const target = player.pos;
-    const to = new THREE.Vector3().subVectors(target, c.mesh.position);
-    const dist = to.length();
-    if (player.wanted > 0) {
-      to.normalize();
-      c.mesh.rotation.y = THREE.MathUtils.lerp(c.mesh.rotation.y, Math.atan2(to.x, to.z), 0.06);
-      c.mesh.position.addScaledVector(new THREE.Vector3(Math.sin(c.mesh.rotation.y), 0, Math.cos(c.mesh.rotation.y)), (c.speed + player.wanted * 6) * dt);
-      if (dist < 24) {
-        c.sirenTick += dt * (6 + player.wanted);
-        if (Math.sin(c.sirenTick) > 0.97) tone(760, 0.08, 'triangle', 0.02);
-        if (Math.sin(c.sirenTick) < -0.97) tone(560, 0.08, 'triangle', 0.02);
-      }
-      if (dist < 9 && !player.onFoot) player.crimeHeat += dt * 4;
+      if (!keys.e) interactLatch = false;
     } else {
-      c.mesh.position.x += Math.sin(c.mesh.rotation.y) * 8 * dt;
-      c.mesh.position.z += Math.cos(c.mesh.rotation.y) * 8 * dt;
-      if (Math.random() < 0.01) c.mesh.rotation.y += (Math.random() - 0.5) * 1.5;
+      const car = player.car;
+      const accel = (keys.w || keys.arrowup ? 1 : 0) - (keys.s || keys.arrowdown ? 1 : 0);
+      const steer = (keys.a || keys.arrowleft ? -1 : 0) + (keys.d || keys.arrowright ? 1 : 0);
+      const max = keys.shift ? 280 : 205;
+
+      car.speed += accel * 260 * dt;
+      car.speed *= keys[' '] ? 0.9 : 0.985;
+      car.speed = clamp(car.speed, -110, max);
+      car.dir += steer * (1.3 + Math.abs(car.speed) * 0.005) * dt;
+      car.x += Math.cos(car.dir - Math.PI / 2) * car.speed * dt;
+      car.y += Math.sin(car.dir - Math.PI / 2) * car.speed * dt;
+
+      player.x = car.x;
+      player.y = car.y;
+      player.dir = car.dir;
+      promptEl.style.display = 'block';
+      promptEl.textContent = 'Press E to exit vehicle';
+      if (keys.e && !interactLatch) {
+        interactLatch = true;
+        player.onFoot = true;
+        player.car = null;
+        player.x += 30;
+        player.y += 14;
+        beep(270, 0.08, 'sawtooth', 0.035);
+      }
+      if (!keys.e) interactLatch = false;
     }
-    clampWorld(c.mesh.position);
-  }
-}
 
-function updateUI() {
-  stateEl.textContent = player.onFoot ? 'On Foot' : `Driving  ${Math.round(Math.abs(traffic.find((t) => t.mesh === player.car).speed || 0))} mph`;
-  wantedEl.innerHTML = 'Wanted: ' + Array.from({ length: 5 }, (_, i) => `<span class="${i < player.wanted ? 'on' : ''}">★</span>`).join('');
-  zones.sort((a, b) => player.pos.distanceToSquared(new THREE.Vector3(a.x, 0, a.z)) - player.pos.distanceToSquared(new THREE.Vector3(b.x, 0, b.z)));
-  zoneEl.textContent = `Zone: ${zones[0].name}`;
-
-  minimapCtx.fillStyle = '#0b121d';
-  minimapCtx.fillRect(0, 0, 240, 240);
-  minimapCtx.strokeStyle = '#2f3f58';
-  minimapCtx.lineWidth = 1;
-  for (let i = -4; i <= 4; i++) {
-    const u = 120 + i * 24;
-    minimapCtx.beginPath(); minimapCtx.moveTo(u, 0); minimapCtx.lineTo(u, 240); minimapCtx.stroke();
-    minimapCtx.beginPath(); minimapCtx.moveTo(0, u); minimapCtx.lineTo(240, u); minimapCtx.stroke();
-  }
-  const drawDot = (x, z, color, r = 3) => {
-    const u = 120 + (x / HALF) * 120;
-    const v = 120 + (z / HALF) * 120;
-    minimapCtx.fillStyle = color;
-    minimapCtx.beginPath(); minimapCtx.arc(u, v, r, 0, Math.PI * 2); minimapCtx.fill();
+    player.x = clamp(player.x, -WORLD_SIZE / 2 + 35, WORLD_SIZE / 2 - 35);
+    player.y = clamp(player.y, -WORLD_SIZE / 2 + 35, WORLD_SIZE / 2 - 35);
   };
-  for (const t of traffic) drawDot(t.mesh.position.x, t.mesh.position.z, t.police ? '#64b4ff' : '#d2dee7', t.police ? 2.6 : 2);
-  for (const p of peds) drawDot(p.mesh.position.x, p.mesh.position.z, '#58f7aa', 1.4);
-  drawDot(player.pos.x, player.pos.z, '#ff5555', 4.3);
-}
 
-function updateCamera() {
-  const target = player.onFoot ? player.pos : player.car.position;
-  const behind = new THREE.Vector3(0, 115, 85);
-  const desired = target.clone().add(behind);
-  camera.position.lerp(desired, 0.08);
-  camera.lookAt(target.x, 0, target.z);
-}
+  const updateTraffic = (dt) => {
+    for (const c of traffic) {
+      c.x += Math.cos(c.dir - Math.PI / 2) * c.speed * dt;
+      c.y += Math.sin(c.dir - Math.PI / 2) * c.speed * dt;
+      if (Math.random() < 0.01) c.dir += rand(-0.14, 0.14);
+      if (Math.abs(c.x) > WORLD_SIZE / 2 - 40 || Math.abs(c.y) > WORLD_SIZE / 2 - 40) c.dir += Math.PI;
+    }
+  };
 
-let prev = performance.now();
-function tick(now) {
-  const dt = Math.min(0.03, (now - prev) / 1000);
-  prev = now;
+  const updatePedestrians = (dt) => {
+    for (const p of pedestrians) {
+      p.x += Math.cos(p.dir) * p.speed * dt;
+      p.y += Math.sin(p.dir) * p.speed * dt;
+      if (Math.random() < 0.025 || Math.abs(p.x) > WORLD_SIZE / 2 - 10 || Math.abs(p.y) > WORLD_SIZE / 2 - 10) p.dir += rand(-1.2, 1.2);
 
-  updatePlayer(dt);
-  updateTraffic(dt);
-  updatePeds(dt);
-  updateCops(dt);
-  updateUI();
-  updateCamera();
-  renderer.render(scene, camera);
-  requestAnimationFrame(tick);
-}
-requestAnimationFrame(tick);
+      if (!player.onFoot && dist(p, player) < 24 && Math.abs(playerCar.speed) > 90) {
+        p.x += rand(-80, 80);
+        p.y += rand(-80, 80);
+        player.heat += 3;
+        beep(100, 0.12, 'square', 0.05);
+      }
+    }
+  };
 
-window.addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
+  const updateCops = (dt) => {
+    for (const c of cops) {
+      if (player.wanted > 0) {
+        const dx = player.x - c.x;
+        const dy = player.y - c.y;
+        const ang = Math.atan2(dy, dx) + Math.PI / 2;
+        let delta = ang - c.dir;
+        while (delta > Math.PI) delta -= Math.PI * 2;
+        while (delta < -Math.PI) delta += Math.PI * 2;
+        c.dir += delta * 0.08;
+        const chase = c.speed + player.wanted * 36;
+        c.x += Math.cos(c.dir - Math.PI / 2) * chase * dt;
+        c.y += Math.sin(c.dir - Math.PI / 2) * chase * dt;
+
+        const d = dist(c, player);
+        if (d < 230) {
+          c.siren += dt * 16;
+          if (Math.sin(c.siren) > 0.98) beep(810, 0.06, 'triangle', 0.014);
+          if (Math.sin(c.siren) < -0.98) beep(560, 0.06, 'triangle', 0.014);
+        }
+        if (d < 55 && !player.onFoot) player.heat += dt * 2;
+      } else {
+        c.x += Math.cos(c.dir - Math.PI / 2) * 70 * dt;
+        c.y += Math.sin(c.dir - Math.PI / 2) * 70 * dt;
+        if (Math.random() < 0.02) c.dir += rand(-0.6, 0.6);
+      }
+      c.x = clamp(c.x, -WORLD_SIZE / 2 + 30, WORLD_SIZE / 2 - 30);
+      c.y = clamp(c.y, -WORLD_SIZE / 2 + 30, WORLD_SIZE / 2 - 30);
+    }
+  };
+
+  const drawWorld = (camX, camY) => {
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, '#0b1220');
+    gradient.addColorStop(1, '#142035');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    const tl = worldToScreen(-WORLD_SIZE / 2, -WORLD_SIZE / 2, camX, camY);
+    ctx.fillStyle = '#1f3b2d';
+    ctx.fillRect(tl.x, tl.y, WORLD_SIZE, WORLD_SIZE);
+
+    ctx.fillStyle = '#2f3742';
+    roads.forEach((r) => {
+      const p = worldToScreen(r.x, r.y, camX, camY);
+      ctx.fillRect(p.x, p.y, r.w, r.h);
+    });
+
+    ctx.strokeStyle = '#f6d365';
+    ctx.lineWidth = 2;
+    for (let i = -8; i <= 8; i++) {
+      const x = i * BLOCK;
+      for (let y = -WORLD_SIZE / 2; y < WORLD_SIZE / 2; y += 90) {
+        const p = worldToScreen(x, y, camX, camY);
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y + 40); ctx.stroke();
+      }
+      for (let xx = -WORLD_SIZE / 2; xx < WORLD_SIZE / 2; xx += 90) {
+        const p = worldToScreen(xx, x, camX, camY);
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + 40, p.y); ctx.stroke();
+      }
+    }
+
+    for (const b of buildings) {
+      const p = worldToScreen(b.x - b.w / 2, b.y - b.h / 2, camX, camY);
+      ctx.fillStyle = b.color;
+      ctx.fillRect(p.x, p.y, b.w, b.h);
+      ctx.fillStyle = b.roof;
+      ctx.fillRect(p.x + 10, p.y + 10, b.w - 20, b.h - 20);
+    }
+
+    for (const t of trees) {
+      const p = worldToScreen(t.x, t.y, camX, camY);
+      ctx.fillStyle = '#3b2f24';
+      ctx.fillRect(p.x - 2, p.y - 6, 4, 12);
+      ctx.beginPath();
+      ctx.fillStyle = '#1faa59';
+      ctx.arc(p.x, p.y - 6, t.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    for (const p of pedestrians) {
+      const s = worldToScreen(p.x, p.y, camX, camY);
+      ctx.beginPath();
+      ctx.fillStyle = p.color;
+      ctx.arc(s.x, s.y, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#111827';
+      ctx.stroke();
+    }
+
+    for (const c of traffic) drawCar(c, camX, camY, false);
+    for (const c of cops) drawCar(c, camX, camY, true);
+    if (player.onFoot) {
+      const p = worldToScreen(player.x, player.y, camX, camY);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(player.dir);
+      ctx.fillStyle = '#fde68a';
+      ctx.beginPath();
+      ctx.arc(0, 0, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ef4444';
+      ctx.fillRect(-2, -15, 4, 8);
+      ctx.restore();
+    }
+    if (!player.onFoot) drawCar(playerCar, camX, camY, false);
+
+    ctx.restore();
+
+    ctx.fillStyle = 'rgba(255,255,255,.06)';
+    ctx.fillRect(0, 0, canvas.width, 56);
+  };
+
+  const drawMiniMap = () => {
+    mm.fillStyle = '#0b121d';
+    mm.fillRect(0, 0, 240, 240);
+    mm.strokeStyle = '#334155';
+    for (let i = 0; i < 240; i += 24) {
+      mm.beginPath(); mm.moveTo(i, 0); mm.lineTo(i, 240); mm.stroke();
+      mm.beginPath(); mm.moveTo(0, i); mm.lineTo(240, i); mm.stroke();
+    }
+
+    const dot = (x, y, c, r) => {
+      const u = 120 + (x / (WORLD_SIZE / 2)) * 120;
+      const v = 120 + (y / (WORLD_SIZE / 2)) * 120;
+      mm.beginPath(); mm.fillStyle = c; mm.arc(u, v, r, 0, Math.PI * 2); mm.fill();
+    };
+
+    traffic.forEach((c) => dot(c.x, c.y, '#d1d5db', 2));
+    pedestrians.forEach((p) => dot(p.x, p.y, '#4ade80', 1.2));
+    cops.forEach((c) => dot(c.x, c.y, '#60a5fa', 2.5));
+    dot(player.x, player.y, '#f43f5e', 4);
+  };
+
+  const updateUi = () => {
+    const z = nearestZone();
+    zoneEl.textContent = `Zone: ${z.name}`;
+    stateEl.textContent = player.onFoot ? 'On Foot' : `Driving ${Math.round(Math.abs(playerCar.speed))} mph`;
+    wantedEl.innerHTML = `Wanted: ${Array.from({ length: 5 }, (_, i) => `<span class="${i < player.wanted ? 'on' : ''}">★</span>`).join('')}`;
+  };
+
+  const resize = () => {
+    canvas.width = innerWidth;
+    canvas.height = innerHeight;
+  };
+  window.addEventListener('resize', resize);
+  resize();
+
+  let prev = performance.now();
+  const loop = (now) => {
+    const dt = Math.min(0.033, (now - prev) / 1000);
+    prev = now;
+
+    updatePlayer(dt);
+    updateTraffic(dt);
+    updatePedestrians(dt);
+    updateWanted(dt);
+    updateCops(dt);
+
+    drawWorld(player.x, player.y);
+    drawMiniMap();
+    updateUi();
+
+    requestAnimationFrame(loop);
+  };
+
+  requestAnimationFrame(loop);
+})();
